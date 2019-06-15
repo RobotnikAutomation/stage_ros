@@ -121,8 +121,8 @@ private:
 
   // Appends the given robot ID to the given message name.  If omitRobotID
   // is true, an unaltered copy of the name is returned.
-  const char* mapName(const char* name, size_t robotID, Stg::Model* mod) const;
-  const char* mapName(const char* name, size_t robotID, size_t deviceID, Stg::Model* mod) const;
+  const char* mapName(std::string name, size_t robotID, Stg::Model* mod) const;
+  const char* mapName(std::string name, size_t robotID, size_t deviceID, Stg::Model* mod) const;
   const char* mapFrameName(const char* name, size_t robotID, size_t deviceID, Stg::Model* mod) const;
 
   tf::TransformBroadcaster tf;
@@ -138,6 +138,19 @@ private:
   ros::Time base_last_globalpos_time;
   // Last published global pose of each robot
   std::vector<Stg::Pose> base_last_globalpos;
+
+  // topic name for odometry
+  std::string odom_topic;
+  // topic name for cmd_vel
+  std::string cmd_vel_topic;
+  // topic name for scan
+  std::string scan_topic;
+  // topic name for rgb camera
+  std::string rgb_camera_topic;
+  // topic name for depth camera
+  std::string depth_camera_topic;
+  // topic name for camera info
+  std::string camera_info_topic;
 
 public:
   // Constructor; stage itself needs argc/argv.  fname is the .world file
@@ -168,7 +181,7 @@ public:
 };
 
 // since stageros is single-threaded, this is OK. revisit if that changes!
-const char* StageNode::mapName(const char* name, size_t robotID, Stg::Model* mod) const
+const char* StageNode::mapName(std::string name, size_t robotID, Stg::Model* mod) const
 {
   // ROS_INFO("Robot %lu: Device %s", robotID, name);
   bool umn = this->use_model_names;
@@ -180,20 +193,20 @@ const char* StageNode::mapName(const char* name, size_t robotID, Stg::Model* mod
 
     if ((found == std::string::npos) && umn)
     {
-      snprintf(buf, sizeof(buf), "/%s/%s", ((Stg::Ancestor*)mod)->Token(), name);
+      snprintf(buf, sizeof(buf), "/%s/%s", ((Stg::Ancestor*)mod)->Token(), name.c_str());
     }
     else
     {
-      snprintf(buf, sizeof(buf), "/robot_%u/%s", (unsigned int)robotID, name);
+      snprintf(buf, sizeof(buf), "/robot_%u/%s", (unsigned int)robotID, name.c_str());
     }
 
     return buf;
   }
   else
-    return name;
+    return name.c_str();
 }
 
-const char* StageNode::mapName(const char* name, size_t robotID, size_t deviceID, Stg::Model* mod) const
+const char* StageNode::mapName(std::string name, size_t robotID, size_t deviceID, Stg::Model* mod) const
 {
   // ROS_INFO("Robot %lu: Device %s:%lu", robotID, name, deviceID);
   bool umn = this->use_model_names;
@@ -205,11 +218,11 @@ const char* StageNode::mapName(const char* name, size_t robotID, size_t deviceID
 
     if ((found == std::string::npos) && umn)
     {
-      snprintf(buf, sizeof(buf), "/%s/%s_%u", ((Stg::Ancestor*)mod)->Token(), name, (unsigned int)deviceID);
+      snprintf(buf, sizeof(buf), "/%s/%s_%u", ((Stg::Ancestor*)mod)->Token(), name.c_str(), (unsigned int)deviceID);
     }
     else
     {
-      snprintf(buf, sizeof(buf), "/robot_%u/%s_%u", (unsigned int)robotID, name, (unsigned int)deviceID);
+      snprintf(buf, sizeof(buf), "/robot_%u/%s_%u", (unsigned int)robotID, name.c_str(), (unsigned int)deviceID);
     }
 
     return buf;
@@ -217,7 +230,7 @@ const char* StageNode::mapName(const char* name, size_t robotID, size_t deviceID
   else
   {
     static char buf[100];
-    snprintf(buf, sizeof(buf), "/%s_%u", name, (unsigned int)deviceID);
+    snprintf(buf, sizeof(buf), "/%s_%u", name.c_str(), (unsigned int)deviceID);
     return buf;
   }
 }
@@ -310,6 +323,24 @@ StageNode::StageNode(int argc, char** argv, bool gui, const char* fname, bool us
   if (!localn.getParam("is_depth_canonical", isDepthCanonical))
     isDepthCanonical = true;
 
+  if (!localn.getParam("odom_topic", odom_topic))
+    odom_topic = ODOM;
+
+  if (!localn.getParam("cmd_vel_topic", cmd_vel_topic))
+    cmd_vel_topic = CMD_VEL;
+
+  if (!localn.getParam("scan_topic", scan_topic))
+    scan_topic = BASE_SCAN;
+
+  if (!localn.getParam("rgb_camera_topic", rgb_camera_topic))
+    rgb_camera_topic = IMAGE;
+
+  if (!localn.getParam("depth_camera_topic", depth_camera_topic))
+    depth_camera_topic = DEPTH;
+
+  if (!localn.getParam("camera_info_topic", camera_info_topic))
+    camera_info_topic = CAMERA_INFO;
+
   // We'll check the existence of the world file, because libstage doesn't
   // expose its failure to open it.  Could go further with checks (e.g., is
   // it readable by this user).
@@ -381,22 +412,22 @@ int StageNode::SubscribeModels()
     ROS_INFO("Robot %s provided %lu rangers and %lu cameras", new_robot->positionmodel->Token(),
              new_robot->lasermodels.size(), new_robot->cameramodels.size());
 
-    new_robot->odom_pub =
-        n_.advertise<nav_msgs::Odometry>(mapName(ODOM, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10);
+    new_robot->odom_pub = n_.advertise<nav_msgs::Odometry>(
+        mapName(odom_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10);
     new_robot->ground_truth_pub = n_.advertise<nav_msgs::Odometry>(
         mapName(BASE_POSE_GROUND_TRUTH, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10);
-    new_robot->cmdvel_sub =
-        n_.subscribe<geometry_msgs::Twist>(mapName(CMD_VEL, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10,
-                                           boost::bind(&StageNode::cmdvelReceived, this, r, _1));
+    new_robot->cmdvel_sub = n_.subscribe<geometry_msgs::Twist>(
+        mapName(cmd_vel_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10,
+        boost::bind(&StageNode::cmdvelReceived, this, r, _1));
 
     for (size_t s = 0; s < new_robot->lasermodels.size(); ++s)
     {
       if (new_robot->lasermodels.size() == 1)
         new_robot->laser_pubs.push_back(n_.advertise<sensor_msgs::LaserScan>(
-            mapName(BASE_SCAN, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(scan_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
       else
         new_robot->laser_pubs.push_back(n_.advertise<sensor_msgs::LaserScan>(
-            mapName(BASE_SCAN, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(scan_topic, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
     }
 
     for (size_t s = 0; s < new_robot->cameramodels.size(); ++s)
@@ -404,20 +435,20 @@ int StageNode::SubscribeModels()
       if (new_robot->cameramodels.size() == 1)
       {
         new_robot->image_pubs.push_back(n_.advertise<sensor_msgs::Image>(
-            mapName(IMAGE, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(rgb_camera_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
         new_robot->depth_pubs.push_back(n_.advertise<sensor_msgs::Image>(
-            mapName(DEPTH, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(depth_camera_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
         new_robot->camera_pubs.push_back(n_.advertise<sensor_msgs::CameraInfo>(
-            mapName(CAMERA_INFO, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(camera_info_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
       }
       else
       {
         new_robot->image_pubs.push_back(n_.advertise<sensor_msgs::Image>(
-            mapName(IMAGE, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(rgb_camera_topic, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
         new_robot->depth_pubs.push_back(n_.advertise<sensor_msgs::Image>(
-            mapName(DEPTH, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(depth_camera_topic, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
         new_robot->camera_pubs.push_back(n_.advertise<sensor_msgs::CameraInfo>(
-            mapName(CAMERA_INFO, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+            mapName(camera_info_topic, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
       }
     }
 
