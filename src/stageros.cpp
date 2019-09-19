@@ -47,6 +47,11 @@
 #include <nav_msgs/Odometry.h>
 #include <geometry_msgs/Twist.h>
 #include <rosgraph_msgs/Clock.h>
+//Robotnik's elevator
+#include <actionlib/server/simple_action_server.h>
+#include <robotnik_msgs/SetElevatorAction.h>
+#include <std_msgs/Bool.h>
+#include <std_msgs/Float64.h>
 
 #include <std_srvs/Empty.h>
 
@@ -60,6 +65,8 @@
 #define BASE_SCAN "base_scan"
 #define BASE_POSE_GROUND_TRUTH "base_pose_ground_truth"
 #define CMD_VEL "cmd_vel"
+#define GRIPPER "set_elevator"
+#define DOOR "door_controller/command"
 
 // Our node
 class StageNode
@@ -75,7 +82,11 @@ private:
   std::vector<Stg::ModelCamera*> cameramodels;
   std::vector<Stg::ModelRanger*> lasermodels;
   std::vector<Stg::ModelPosition*> positionmodels;
+  std::vector<Stg::ModelGripper*> grippermodels;
+  std::vector<Stg::ModelActuator*> actuatormodels;
 
+ 
+  
   // a structure representing a robot inthe simulator
   struct StageRobot
   {
@@ -83,11 +94,22 @@ private:
     Stg::ModelPosition* positionmodel;            // one position
     std::vector<Stg::ModelCamera*> cameramodels;  // multiple cameras per position
     std::vector<Stg::ModelRanger*> lasermodels;   // multiple rangers per position
+    std::vector<Stg::ModelGripper*> grippermodels;
+    std::vector<Stg::ModelActuator*> actuatormodels;
 
     // ros publishers
     ros::Publisher odom_pub;          // one odom
     ros::Publisher ground_truth_pub;  // one ground truth
-
+    
+    //one gripper TODO: more grippers
+    /*actionlib::SimpleActionServer<robotnik_msgs::SetElevatorAction> gripper_action;
+    robotnik_msgs::SetElevatorActionFeedback gripper_feedback;
+    robotnik_msgs::SetElevatorActionResult gripper_result;
+*/
+    ros::Subscriber gripper_sub; 
+    //automatic door
+    ros::Subscriber actuator_sub; 
+ 
     std::vector<ros::Publisher> image_pubs;   // multiple images
     std::vector<ros::Publisher> depth_pubs;   // multiple depths
     std::vector<ros::Publisher> camera_pubs;  // multiple cameras
@@ -151,6 +173,10 @@ private:
   std::string depth_camera_topic;
   // topic name for camera info
   std::string camera_info_topic;
+  // action for elevator
+  std::string set_elevator_action_name;
+  // topic name for door
+  std::string set_door_control_name;
 
 public:
   // Constructor; stage itself needs argc/argv.  fname is the .world file
@@ -175,6 +201,12 @@ public:
 
   // Service callback for soft reset
   bool cb_reset_srv(std_srvs::Empty::Request& request, std_srvs::Empty::Response& response);
+
+  //elevator callback
+  void setelevatorCB(int idx, const boost::shared_ptr<std_msgs::Bool const>& msg);
+
+  //door callback
+  void doorCB(int idx, const boost::shared_ptr<std_msgs::Float64 const>& msg);
 
   // The main simulator object
   Stg::World* world;
@@ -289,6 +321,17 @@ void StageNode::ghfunc(Stg::Model* mod, StageNode* node)
   {
     node->cameramodels.push_back(dynamic_cast<Stg::ModelCamera*>(mod));
   }
+  //gripper
+  if (dynamic_cast<Stg::ModelGripper*>(mod))
+  {
+    node->grippermodels.push_back(dynamic_cast<Stg::ModelGripper*>(mod));
+  }
+  //door
+  if (dynamic_cast<Stg::ModelActuator*>(mod))
+  {
+    ROS_INFO("Actuator stage!");
+    node->actuatormodels.push_back(dynamic_cast<Stg::ModelActuator*>(mod));
+  }
 }
 
 bool StageNode::cb_reset_srv(std_srvs::Empty::Request& request, std_srvs::Empty::Response& response)
@@ -305,7 +348,43 @@ bool StageNode::cb_reset_srv(std_srvs::Empty::Request& request, std_srvs::Empty:
 void StageNode::cmdvelReceived(int idx, const boost::shared_ptr<geometry_msgs::Twist const>& msg)
 {
   boost::mutex::scoped_lock lock(msg_lock);
-  this->positionmodels[idx]->SetSpeed(msg->linear.x, msg->linear.y, msg->angular.z);
+  this->positionmodels[idx]->SetSpeed(msg->linear.x, msg->linear.y, msg->linear.z, msg->angular.z);
+  this->base_last_cmd = this->sim_time;
+}
+
+void StageNode::setelevatorCB(int idx, const boost::shared_ptr<std_msgs::Bool const>& msg)
+{
+  boost::mutex::scoped_lock lock(msg_lock);
+  //ROS_INFO("dentro con idx=%d",idx);
+  if(msg->data){
+    this->grippermodels[idx]->CommandClose();
+    //this->grippermodels[idx]->CommandUp();
+  }else{
+    this->grippermodels[idx]->CommandOpen();
+    //this->grippermodels[idx]->CommandDown();
+  }
+  this->base_last_cmd = this->sim_time;
+}
+
+void StageNode::doorCB(int idx, const boost::shared_ptr<std_msgs::Float64 const>& msg)
+{
+  boost::mutex::scoped_lock lock(msg_lock);
+  if(msg->data<=0)
+    this->positionmodels[idx]->GoTo(0, 0, -1, 0);
+  else
+    this->positionmodels[idx]->GoTo(0, 0, 1, 0);
+  this->base_last_cmd = this->sim_time;
+  /*ROS_INFO("dentro con idx=%d size=%d data:%d",idx,this->actuatormodels.size(), msg->data);
+  boost::mutex::scoped_lock lock(msg_lock);  
+  ROS_INFO("dentro con pos=%f max=%f min=%f",this->actuatormodels[idx]->GetPosition(),this->actuatormodels[idx]->GetMaxPosition(),this->actuatormodels[idx]->GetMinPosition());
+  this->actuatormodels[idx]->GoTo(10.0,0,0,0);
+  //this->actuatormodels[idx]->SetSpeed(4.0);
+  
+  /*if(msg->data){
+    this->actuatormodels[idx]->GoTo(2);    
+  }else{
+    this->actuatormodels[idx]->GoTo(0);
+  }*/
   this->base_last_cmd = this->sim_time;
 }
 
@@ -340,6 +419,13 @@ StageNode::StageNode(int argc, char** argv, bool gui, const char* fname, bool us
 
   if (!localn.getParam("camera_info_topic", camera_info_topic))
     camera_info_topic = CAMERA_INFO;
+  
+  if (!localn.getParam("set_elevator_action_name", set_elevator_action_name))
+    set_elevator_action_name = GRIPPER;
+
+  if (!localn.getParam("set_door_control_name", set_door_control_name))
+    set_door_control_name = DOOR;
+
 
   // We'll check the existence of the world file, because libstage doesn't
   // expose its failure to open it.  Could go further with checks (e.g., is
@@ -384,6 +470,7 @@ int StageNode::SubscribeModels()
     StageRobot* new_robot = new StageRobot;
     new_robot->positionmodel = this->positionmodels[r];
     new_robot->positionmodel->Subscribe();
+    size_t a = 0;
 
     ROS_INFO("Subscribed to Stage position model \"%s\"", this->positionmodels[r]->Token());
 
@@ -408,9 +495,31 @@ int StageNode::SubscribeModels()
       }
     }
 
+    for (size_t s = 0; s < this->grippermodels.size(); s++)
+    {
+      if (this->grippermodels[s] and this->grippermodels[s]->Parent() == new_robot->positionmodel)
+      {
+        new_robot->grippermodels.push_back(this->grippermodels[s]);
+        this->grippermodels[s]->Subscribe();
+
+        ROS_INFO("subscribed to Stage gripper model \"%s\"", this->grippermodels[s]->Token());
+      }
+    }
+
+    for (a = 0; a < this->actuatormodels.size(); a++)
+    {
+      if (this->actuatormodels[a] and this->actuatormodels[a]->Parent() == new_robot->positionmodel)
+      {
+        new_robot->actuatormodels.push_back(this->actuatormodels[a]);
+        this->actuatormodels[a]->Subscribe();
+
+        ROS_INFO("subscribed to Stage actuator model \"%s\"", this->actuatormodels[a]->Token());
+      }
+    }
+
     // TODO - print the topic names nicely as well
-    ROS_INFO("Robot %s provided %lu rangers and %lu cameras", new_robot->positionmodel->Token(),
-             new_robot->lasermodels.size(), new_robot->cameramodels.size());
+    ROS_INFO("Robot %s provided %lu rangers and %lu cameras and %lu actuators", new_robot->positionmodel->Token(),
+             new_robot->lasermodels.size(), new_robot->cameramodels.size(), new_robot->actuatormodels.size());
 
     new_robot->odom_pub = n_.advertise<nav_msgs::Odometry>(
         mapName(odom_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10);
@@ -419,6 +528,30 @@ int StageNode::SubscribeModels()
     new_robot->cmdvel_sub = n_.subscribe<geometry_msgs::Twist>(
         mapName(cmd_vel_topic, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10,
         boost::bind(&StageNode::cmdvelReceived, this, r, _1));
+
+    //set elevator action server
+    /*new_robot->gripper_action(n_, mapName(set_elevator_action_name, r, static_cast<Stg::Model*>(new_robot->positionmodel)),10, boost::bind(&StageNode::setelevatorCB, this, _1), false),"jelou"{
+       new_robot->gripper_action.start();
+    }*/
+
+    //new_robot->gripper_action.registerGoalCallback(boost::bind(&StageNode::setelevatorCB, this, r, _1));
+    /*for (size_t s = 0; s < new_robot->grippermodels.size(); ++s)
+    {
+      if (new_robot->grippermodels.size() == 1)
+        new_robot->gripper_action.push_back(n_.advertise<robotnik_msgs::SetElevatorAction>(
+            mapName(set_elevator_action_name, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+      else
+        new_robot->gripper_action.push_back(n_.advertise<sensor_msgs::LaserScan>(
+            mapName(set_elevator_action_name, r, s, static_cast<Stg::Model*>(new_robot->positionmodel)), 10));
+    }*/
+    ROS_INFO("\n \n Robot %s\n",mapName(set_door_control_name, r, static_cast<Stg::Model*>(new_robot->positionmodel)));
+    new_robot->gripper_sub = n_.subscribe<std_msgs::Bool>(
+        mapName(set_elevator_action_name, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10,
+        boost::bind(&StageNode::setelevatorCB, this, r, _1));
+
+    new_robot->actuator_sub = n_.subscribe<std_msgs::Float64>(
+        mapName(set_door_control_name, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10,
+        boost::bind(&StageNode::doorCB, this, r, _1));
 
     for (size_t s = 0; s < new_robot->lasermodels.size(); ++s)
     {
@@ -498,7 +631,7 @@ void StageNode::WorldCallback()
       ((this->sim_time - this->base_last_cmd) >= this->base_watchdog_timeout))
   {
     for (size_t r = 0; r < this->positionmodels.size(); r++)
-      this->positionmodels[r]->SetSpeed(0.0, 0.0, 0.0);
+      this->positionmodels[r]->SetSpeed(0.0, 0.0, 0.0, 0.0);
   }
 
   // loop on the robot models

@@ -10,6 +10,9 @@ find_package(catkin REQUIRED
     std_msgs
     std_srvs
     tf
+    robotnik_msgs
+    actionlib
+    actionlib_msgs
 )
 
 find_package(Boost REQUIRED COMPONENTS system thread)
