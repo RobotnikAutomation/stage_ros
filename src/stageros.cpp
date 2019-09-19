@@ -348,7 +348,7 @@ bool StageNode::cb_reset_srv(std_srvs::Empty::Request& request, std_srvs::Empty:
 void StageNode::cmdvelReceived(int idx, const boost::shared_ptr<geometry_msgs::Twist const>& msg)
 {
   boost::mutex::scoped_lock lock(msg_lock);
-  this->positionmodels[idx]->SetSpeed(msg->linear.x, msg->linear.y, msg->linear.z, msg->angular.z);
+  this->positionmodels[idx]->SetSpeed(msg->linear.x, msg->linear.y, msg->angular.z);
   this->base_last_cmd = this->sim_time;
 }
 
@@ -631,7 +631,7 @@ void StageNode::WorldCallback()
       ((this->sim_time - this->base_last_cmd) >= this->base_watchdog_timeout))
   {
     for (size_t r = 0; r < this->positionmodels.size(); r++)
-      this->positionmodels[r]->SetSpeed(0.0, 0.0, 0.0, 0.0);
+      this->positionmodels[r]->SetSpeed(0.0, 0.0, 0.0);
   }
 
   // loop on the robot models
